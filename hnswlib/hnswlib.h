@@ -1,31 +1,22 @@
 #pragma once
-#ifndef NO_MANUAL_VECTORIZATION
-#ifdef __SSE__
-#define USE_SSE
-#ifdef __AVX__
-#define USE_AVX
-#endif
-#endif
-#endif
-
-#if defined(USE_AVX) || defined(USE_SSE)
 #ifdef _MSC_VER
 #include <intrin.h>
 #include <stdexcept>
-#else
-#include <x86intrin.h>
+
+#define  __builtin_popcount(t) __popcnt(t)
+
 #endif
+
+
+#include <queue>
+
+#include <string.h>
 
 #if defined(__GNUC__)
 #define PORTABLE_ALIGN32 __attribute__((aligned(32)))
 #else
 #define PORTABLE_ALIGN32 __declspec(align(32))
 #endif
-#endif
-
-#include <queue>
-
-#include <string.h>
 
 namespace hnswlib {
     typedef size_t labeltype;
@@ -43,6 +34,9 @@ namespace hnswlib {
     template<typename MTYPE>
     using DISTFUNC = MTYPE(*)(const void *, const void *, const void *);
 
+    template<typename MTYPE>
+    using W_DISTFUNC = MTYPE(*)(const void *, const void *, const void *, const void *);
+
 
     template<typename MTYPE>
     class SpaceInterface {
@@ -52,9 +46,10 @@ namespace hnswlib {
 
         virtual DISTFUNC<MTYPE> get_dist_func() = 0;
 
+        virtual W_DISTFUNC<MTYPE> get_weighted_dist_func() = 0;
+
         virtual void *get_dist_func_param() = 0;
 
-        virtual ~SpaceInterface() {}
     };
 
     template<typename dist_t>
@@ -62,6 +57,7 @@ namespace hnswlib {
     public:
         virtual void addPoint(void *datapoint, labeltype label)=0;
         virtual std::priority_queue<std::pair<dist_t, labeltype >> searchKnn(const void *, size_t) const = 0;
+        virtual std::priority_queue<std::pair<dist_t, labeltype >> searchWeightedKnn(const void *, const void *, size_t) const = 0;
         virtual void saveIndex(const std::string &location)=0;
         virtual ~AlgorithmInterface(){
         }

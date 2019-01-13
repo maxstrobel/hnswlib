@@ -39,6 +39,7 @@ namespace hnswlib {
 
             data_size_ = s->get_data_size();
             fstdistfunc_ = s->get_dist_func();
+            fstweighteddistfunc_ = s->get_weighted_dist_func();
             dist_func_param_ = s->get_dist_func_param();
             M_ = M;
             maxM_ = M_;
@@ -126,15 +127,14 @@ namespace hnswlib {
         size_t data_size_;
         size_t label_offset_;
         DISTFUNC<dist_t> fstdistfunc_;
+        W_DISTFUNC<dist_t> fstweighteddistfunc_;
         void *dist_func_param_;
         std::unordered_map<labeltype, tableint> label_lookup_;
 
         std::default_random_engine level_generator_;
 
         inline labeltype getExternalLabel(tableint internal_id) const {
-            labeltype return_label;
-            memcpy(&return_label,(data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_), sizeof(labeltype));
-            return return_label;
+            return *((labeltype *) (data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_));
         }
 
         inline labeltype *getExternalLabeLp(tableint internal_id) const {
@@ -186,19 +186,15 @@ namespace hnswlib {
                     data = (int *) (linkLists_[curNodeNum] + (layer - 1) * size_links_per_element_);
                 int size = *data;
                 tableint *datal = (tableint *) (data + 1);
-        #ifdef USE_SSE
                 _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
                 _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
                 _mm_prefetch(getDataByInternalId(*datal), _MM_HINT_T0);
                 _mm_prefetch(getDataByInternalId(*(datal + 1)), _MM_HINT_T0);
-        #endif
 
                 for (int j = 0; j < size; j++) {
                     tableint candidate_id = *(datal + j);
-        #ifdef USE_SSE
                     _mm_prefetch((char *) (visited_array + *(datal + j + 1)), _MM_HINT_T0);
                     _mm_prefetch(getDataByInternalId(*(datal + j + 1)), _MM_HINT_T0);
-        #endif
                     if (visited_array[candidate_id] == visited_array_tag) continue;
                     visited_array[candidate_id] = visited_array_tag;
                     char *currObj1 = (getDataByInternalId(candidate_id));
@@ -206,9 +202,7 @@ namespace hnswlib {
                     dist_t dist1 = fstdistfunc_(data_point, currObj1, dist_func_param_);
                     if (top_candidates.top().first > dist1 || top_candidates.size() < ef_construction_) {
                         candidateSet.emplace(-dist1, candidate_id);
-        #ifdef USE_SSE
                         _mm_prefetch(getDataByInternalId(candidateSet.top().second), _MM_HINT_T0);
-        #endif
                         top_candidates.emplace(dist1, candidate_id);
                         if (top_candidates.size() > ef_construction_) {
                             top_candidates.pop();
@@ -249,20 +243,16 @@ namespace hnswlib {
                 tableint current_node_id = current_node_pair.second;
                 int *data = (int *) (data_level0_memory_ + current_node_id * size_data_per_element_ + offsetLevel0_);
                 int size = *data;
-        #ifdef USE_SSE
                 _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
                 _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
                 _mm_prefetch(data_level0_memory_ + (*(data + 1)) * size_data_per_element_ + offsetData_, _MM_HINT_T0);
                 _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
-        #endif
 
                 for (int j = 1; j <= size; j++) {
                     int candidate_id = *(data + j);
-        #ifdef USE_SSE
                     _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
                     _mm_prefetch(data_level0_memory_ + (*(data + j + 1)) * size_data_per_element_ + offsetData_,
                                  _MM_HINT_T0);////////////
-        #endif
                     if (!(visited_array[candidate_id] == visited_array_tag)) {
 
                         visited_array[candidate_id] = visited_array_tag;
@@ -272,11 +262,9 @@ namespace hnswlib {
 
                         if (top_candidates.top().first > dist || top_candidates.size() < ef) {
                             candidate_set.emplace(-dist, candidate_id);
-        #ifdef USE_SSE
                             _mm_prefetch(data_level0_memory_ + candidate_set.top().second * size_data_per_element_ +
                                          offsetLevel0_,///////////
                                          _MM_HINT_T0);////////////////////////
-        #endif
 
                             top_candidates.emplace(dist, candidate_id);
 
@@ -635,13 +623,7 @@ namespace hnswlib {
         template<typename data_t>
         std::vector<data_t> getDataByLabel(labeltype label)
         {
-          tableint label_c;
-          auto search = label_lookup_.find(label);
-          if (search == label_lookup_.end()) {
-              throw std::runtime_error("Label not found");
-          }
-          label_c = search->second;
-
+          tableint label_c = label_lookup_[label];
           char* data_ptrv = getDataByInternalId(label_c);
           size_t dim = *((size_t *) dist_func_param_);
           std::vector<data_t> data;
@@ -651,12 +633,12 @@ namespace hnswlib {
             data_ptr += 1;
           }
           return data;
-        }
+        };
 
         void addPoint(void *data_point, labeltype label)
         {
             addPoint(data_point, label,-1);
-        }
+        };
 
         tableint addPoint(void *data_point, labeltype label, int level) {
 
@@ -783,6 +765,114 @@ namespace hnswlib {
 
             std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates = searchBaseLayerST(
                     currObj, query_data, std::max(ef_,k));
+            std::priority_queue<std::pair<dist_t, labeltype >> results;
+            while (top_candidates.size() > k) {
+                top_candidates.pop();
+            }
+            while (top_candidates.size() > 0) {
+                std::pair<dist_t, tableint> rez = top_candidates.top();
+                results.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
+                top_candidates.pop();
+            }
+            return results;
+        };
+
+
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
+        searchBaseLayerSTWeighted(tableint ep_id, const void *data_point, const void *weights, size_t ef) const {
+            VisitedList *vl = visited_list_pool_->getFreeVisitedList();
+            vl_type *visited_array = vl->mass;
+            vl_type visited_array_tag = vl->curV;
+
+            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
+            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidate_set;
+            dist_t dist = fstweighteddistfunc_(data_point, getDataByInternalId(ep_id), weights, dist_func_param_);
+
+            top_candidates.emplace(dist, ep_id);
+            candidate_set.emplace(-dist, ep_id);
+            visited_array[ep_id] = visited_array_tag;
+            dist_t lower_bound = dist;
+
+            while (!candidate_set.empty()) {
+
+                std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
+
+                if ((-current_node_pair.first) > lower_bound) {
+                    break;
+                }
+                candidate_set.pop();
+
+                tableint current_node_id = current_node_pair.second;
+                int *data = (int *) (data_level0_memory_ + current_node_id * size_data_per_element_ + offsetLevel0_);
+                int size = *data;
+                _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
+                _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
+                _mm_prefetch(data_level0_memory_ + (*(data + 1)) * size_data_per_element_ + offsetData_, _MM_HINT_T0);
+                _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+
+                for (int j = 1; j <= size; j++) {
+                    int candidate_id = *(data + j);
+                    _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
+                    _mm_prefetch(data_level0_memory_ + (*(data + j + 1)) * size_data_per_element_ + offsetData_,
+                                 _MM_HINT_T0);////////////
+                    if (!(visited_array[candidate_id] == visited_array_tag)) {
+
+                        visited_array[candidate_id] = visited_array_tag;
+
+                        char *currObj1 = (getDataByInternalId(candidate_id));
+                        dist_t dist = fstweighteddistfunc_(data_point, currObj1, weights, dist_func_param_);
+
+                        if (top_candidates.top().first > dist || top_candidates.size() < ef) {
+                            candidate_set.emplace(-dist, candidate_id);
+                            _mm_prefetch(data_level0_memory_ + candidate_set.top().second * size_data_per_element_ +
+                                         offsetLevel0_,///////////
+                                         _MM_HINT_T0);////////////////////////
+
+                            top_candidates.emplace(dist, candidate_id);
+
+                            if (top_candidates.size() > ef) {
+                                top_candidates.pop();
+                            }
+                            lower_bound = top_candidates.top().first;
+                        }
+                    }
+                }
+            }
+
+            visited_list_pool_->releaseVisitedList(vl);
+            return top_candidates;
+        }
+
+        std::priority_queue<std::pair<dist_t, labeltype >> searchWeightedKnn(const void *query_data, const void *weights, size_t k) const {
+            tableint currObj = enterpoint_node_;
+            dist_t curdist = fstweighteddistfunc_(query_data, getDataByInternalId(enterpoint_node_), weights, dist_func_param_);
+
+            for (int level = maxlevel_; level > 0; level--) {
+                bool changed = true;
+                while (changed) {
+                    changed = false;
+                    int *data;
+                    data = (int *) (linkLists_[currObj] + (level - 1) * size_links_per_element_);
+                    int size = *data;
+                    tableint *datal = (tableint *) (data + 1);
+                    for (int i = 0; i < size; i++) {
+                        tableint cand = datal[i];
+                        if (cand < 0 || cand > max_elements_)
+                            throw std::runtime_error("cand error");
+                        dist_t d = fstweighteddistfunc_(query_data, getDataByInternalId(cand), weights, dist_func_param_);
+
+                        if (d < curdist) {
+                            curdist = d;
+                            currObj = cand;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+
+            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates = searchBaseLayerSTWeighted(
+                    currObj, query_data, weights, std::max(ef_,k));
             std::priority_queue<std::pair<dist_t, labeltype >> results;
             while (top_candidates.size() > k) {
                 top_candidates.pop();
